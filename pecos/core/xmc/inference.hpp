@@ -53,7 +53,8 @@ namespace pecos {
     enum layer_type_t {
         LAYER_TYPE_CSC,
         LAYER_TYPE_HASH_CHUNKED,
-        LAYER_TYPE_BINARY_SEARCH_CHUNKED
+        LAYER_TYPE_BINARY_SEARCH_CHUNKED,
+		LAYER_TYPE_HASH_CSC
     };
 
     struct HierarchicalMLModelMetadata {
@@ -342,7 +343,7 @@ namespace pecos {
         index_type cols;
         index_type rows;
 
-        uint64_t get_nnz() const {
+        mem_index_type get_nnz() const {
             auto& lastChunk = chunks[chunk_count - 1];
             return lastChunk.row_ptr[lastChunk.nnz_rows];
         }
@@ -360,6 +361,67 @@ namespace pecos {
         }
     };
 
+	struct hash_csc_column_t {
+        typedef typename csc_t::index_type index_type;
+        typedef typename csc_t::mem_index_type mem_index_type;
+        typedef typename csc_t::value_type value_type;
+
+		unordered_map<index_type, mem_index_type> row_hash;
+		bool b_has_explicit_bias; // Whether or not this chunk has an explicit bias term
+
+		hash_csc_column_t() :
+            b_has_explicit_bias(false) {
+        }
+	};
+
+	struct hash_csc_t {
+		typedef hash_csc_column_t column_t;
+
+		typedef typename column_t::index_type index_type;
+        typedef typename column_t::mem_index_type mem_index_type;
+        typedef typename column_t::value_type value_type;
+		typedef column_t* col_vec_t;
+
+		column_t* columns; // The chunks of this matrix
+        value_type* entries; // The nz entries of this matrix
+        index_type cols;
+        index_type rows;
+		mem_index_type nnz;
+
+        mem_index_type get_nnz() const {
+           return nnz;
+        }
+
+        // Frees the underlying memory of the matrix (i.e., chunk and entry arrays)
+        // Every function in the inference code that returns a matrix has allocated memory, and
+        // therefore one should call this function to free that memory.
+        void free_underlying_memory() {
+            delete[] columns;
+            delete[] entries;
+        }
+
+        bool check_bias_explicit(const column_t& column) const {
+            return column.row_hash.find(rows - 1) != column.row_hash.end();
+        }
+
+		col_vec_t get_col(index_type col) const {
+			return &columns[col];
+		}
+	};
+
+	template <typename T>
+	bool csc_column_has_bias(bool base_b_has_bias, const T& col);
+
+	template <>
+	bool csc_column_has_bias<csc_t::col_vec_t>(bool base_b_has_bias, const csc_t::col_vec_t& col) {
+		return base_b_has_bias;
+	}
+
+	template <>
+	bool csc_column_has_bias<hash_csc_t::col_vec_t>(bool base_b_has_bias, const hash_csc_t::col_vec_t& col) {
+		return col->b_has_explicit_bias;
+	}
+
     // Adds a scalar multiple of a sparse row of a chunk to a dense output matrix block
     template <typename chunked_matrix_t>
     inline void add_scaled_chunk_row_to_output_block(const chunked_matrix_t& matrix,
@@ -374,6 +436,45 @@ namespace pecos {
             output_block[entry.col_offset] += scalar * entry.val;
         }
     }
+
+	hash_csc_t make_hash_csc_from_csc(const csc_t& mat, bool b_use_bias) {
+		typedef typename csc_t::index_type index_type;
+        typedef typename csc_t::mem_index_type mem_index_type;
+        typedef typename csc_t::value_type value_type;
+        typedef typename std::make_signed<index_type>::type signed_index_type;
+
+		mem_index_type nnz = mat.indptr[mat.cols];
+
+		hash_csc_t result;
+		result.columns = new hash_csc_column_t[mat.cols];
+		result.entries = new value_type[nnz];
+		result.cols = mat.cols;
+		result.rows = mat.rows;
+
+		mem_index_type col_start;
+		mem_index_type col_end;
+
+		std::memcpy(result.entries, mat.data, sizeof(value_type) * nnz);
+
+		for (index_type col = 0; col < mat.cols; ++col) {
+			col_start = mat.indptr[col];
+			col_end = mat.indptr[col + 1];
+			auto& column = result.columns[col];
+
+			for (mem_index_type idx = col_start; idx < col_end; ++idx) {
+				column.row_hash[mat.row_idx[idx]] = idx;
+			}
+
+			 // Precompute whether each chunk actually has a bias term.
+			if (b_use_bias) {
+				column.b_has_explicit_bias = result.check_bias_explicit(column);
+			} else {
+				column.b_has_explicit_bias = false;
+			}
+		}
+
+		return result;
+	}
 
     // Create a chunked matrix from a csc matrix. chunk_col_idx specifies the
     // column starts of each chunk.
@@ -686,6 +787,11 @@ namespace pecos {
         typedef bin_search_chunked_matrix_t matrix_t;
     };
 
+    template <>
+    struct LAYER_TYPE_METADATA_<LAYER_TYPE_HASH_CSC> {
+        typedef hash_csc_t matrix_t;
+    };
+
     template <typename matrix_t>
     struct WEIGHT_MATRIX_METADATA_;
 
@@ -708,6 +814,13 @@ namespace pecos {
         const static layer_type_t LAYER_TYPE = LAYER_TYPE_CSC;
         static constexpr const char* TYPE_NAME = "csc_t";
     };
+
+	template <>
+	struct WEIGHT_MATRIX_METADATA_<hash_csc_t> {
+		const static bool IS_CHUNKED = false;
+        const static layer_type_t LAYER_TYPE = LAYER_TYPE_CSC;
+        static constexpr const char* TYPE_NAME = "hash_csc_t";
+	};
 
     template <>
     struct WEIGHT_MATRIX_METADATA_<hash_chunked_matrix_t> {
@@ -739,10 +852,10 @@ namespace pecos {
             prediction_matrix_t& curr_layer_pred);
     };
 
-    template <>
-    struct w_ops<csc_t, false> {
+    template <typename matrix_t>
+    struct w_ops<matrix_t, false> {
         template <typename query_matrix_t, typename prediction_matrix_t>
-        static void compute_sparse_predictions(const query_matrix_t& X, const csc_t& W,
+        static void compute_sparse_predictions(const query_matrix_t& X, const matrix_t& W,
             typename csr_t::mem_index_type* row_ptr,
             typename csr_t::index_type* col_idx, // Sparsity pattern of prediction at current layer
             bool b_sort_by_chunk,
@@ -837,19 +950,19 @@ namespace pecos {
     }
 
 
-    template <typename query_vec_t, typename weight_vec_t>
+    template <typename query_vec_t, typename weight_vec_t, typename matrix_t>
     struct vector_ops {
         static float inner_product(const query_vec_t& query,
             const weight_vec_t& weight,
-            const typename weight_vec_t::index_type weight_dim,
+            const matrix_t& matrix,
             const typename weight_vec_t::value_type bias, bool b_use_bias);
     };
 
     template <>
-    struct vector_ops<typename csr_t::row_vec_t, typename csc_t::col_vec_t> {
+    struct vector_ops<typename csr_t::row_vec_t, typename csc_t::col_vec_t, csc_t> {
         static float inner_product(const typename csr_t::row_vec_t& query,
             const typename csc_t::col_vec_t& weight,
-            typename csc_t::col_vec_t::index_type weight_dim,
+            const csc_t& matrix,
             typename csc_t::col_vec_t::value_type bias, bool b_use_bias) {
 
             typedef typename csc_t::col_vec_t::value_type value_type;
@@ -857,7 +970,7 @@ namespace pecos {
             value_type res = 0.0;
             if (b_use_bias) {
                  // Is the bias term in the weight vector nonzero?
-                if (weight.nnz > 0 && weight.idx[weight.nnz - 1] == weight_dim - 1) {
+                if (weight.nnz > 0 && weight.idx[weight.nnz - 1] == matrix.rows - 1) {
                     // Add bias to result
                     res += bias * weight.val[weight.nnz - 1];
                 }
@@ -869,10 +982,10 @@ namespace pecos {
     };
 
     template <>
-    struct vector_ops<typename drm_t::row_vec_t, typename csc_t::col_vec_t> {
+    struct vector_ops<typename drm_t::row_vec_t, typename csc_t::col_vec_t, csc_t> {
         static float inner_product(const typename drm_t::row_vec_t& query,
             const typename csc_t::col_vec_t& weight,
-            typename csc_t::col_vec_t::index_type weight_dim,
+            const csc_t& matrix,
             typename csc_t::col_vec_t::value_type bias, bool b_use_bias) {
 
             typedef typename csc_t::col_vec_t::value_type value_type;
@@ -883,7 +996,7 @@ namespace pecos {
                 index_type loop_range;
 
                 // Is the bias term in the weight vector nonzero?
-                bool nz_bias = weight.nnz > 0 && weight.idx[weight.nnz - 1] == weight_dim - 1;
+                bool nz_bias = weight.nnz > 0 && weight.idx[weight.nnz - 1] == matrix.rows - 1;
 
                 // If bias is nonzero in weight vector
                 if (nz_bias) {
@@ -907,10 +1020,81 @@ namespace pecos {
         }
     };
 
+	template <>
+	struct vector_ops<typename csr_t::row_vec_t, typename hash_csc_t::col_vec_t, hash_csc_t> {
+		static float inner_product(const typename csr_t::row_vec_t& query,
+		const hash_csc_t::col_vec_t& weight,
+		const hash_csc_t& matrix,
+		const typename hash_csc_column_t::value_type bias, 
+		bool b_use_bias) {
+
+            typedef typename hash_csc_t::value_type value_type;
+			typedef typename hash_csc_t::mem_index_type mem_index_type;
+
+            value_type res = 0.0;
+
+			 // The chunk has a bias
+            if (b_use_bias) {
+                res += bias * matrix.entries[weight->row_hash.find(matrix.rows - 1)->second];
+            }
+
+            // Add everything else
+            for (csr_t::row_vec_t::index_type i = 0; i < query.nnz; ++i) {
+                auto v_val = query.val[i];
+                auto it = weight->row_hash.find(query.idx[i]);
+                if (it != weight->row_hash.end()) {
+                    res += v_val * matrix.entries[it->second];
+                }
+            }
+
+			return res;
+		}
+	};
+
+	template <>
+	struct vector_ops<typename drm_t::row_vec_t, typename hash_csc_t::col_vec_t, hash_csc_t> {
+		static float inner_product(const typename drm_t::row_vec_t& query,
+		const hash_csc_t::col_vec_t& weight,
+		const hash_csc_t& matrix,
+		const typename hash_csc_column_t::value_type bias, 
+		bool b_use_bias) {
+
+            typedef typename hash_csc_t::value_type value_type;
+			typedef typename hash_csc_t::mem_index_type mem_index_type;
+
+            value_type res = 0.0;
+
+			if (b_use_bias) {
+				// Because the hash map is unordered, we need to check if every
+				// entry is the bias term.
+				// This is very slow, don't use if you can avoid it.
+				for (auto it = weight->row_hash.begin(); it != weight->row_hash.end(); ++it) {
+					if (it->first == query.len) {
+						// The bias term
+						res += bias * matrix.entries[it->second];
+					} else {
+						// Not the bias term
+						auto v_val = query.val[it->first];
+						res += v_val * matrix.entries[it->second];
+					}
+				}
+			} else {
+				for (auto it = weight->row_hash.begin(); it != weight->row_hash.end(); ++it) {
+					// Not the bias term
+					auto v_val = query.val[it->first];
+					res += v_val * matrix.entries[it->second];
+				}
+			}
+
+			return res;
+		}
+	};
+
     // Unchunked version of compute_sparse_predictions.
+	template <typename matrix_t>
     template <typename query_matrix_t, typename prediction_matrix_t>
-    void w_ops<csc_t, false>::compute_sparse_predictions(const query_matrix_t& X,
-        const csc_t& W,
+    void w_ops<matrix_t, false>::compute_sparse_predictions(const query_matrix_t& X,
+        const matrix_t& W,
         typename csr_t::mem_index_type* row_ptr,
         typename csr_t::index_type* col_idx, // Sparsity pattern for this layer
         bool b_sort_by_chunk,
@@ -919,12 +1103,12 @@ namespace pecos {
         prediction_matrix_t& curr_layer_pred) {
 
         typedef typename query_matrix_t::row_vec_t query_row_t;
-        typedef typename csc_t::col_vec_t weight_col_t;
+        typedef typename matrix_t::col_vec_t weight_col_t;
 
         struct compute_query_t {
             typename query_row_t::index_type row;
-            typename weight_col_t::index_type col;
-            typename csr_t::mem_index_type write_addr;
+            typename matrix_t::index_type col;
+            typename matrix_t::mem_index_type write_addr;
 
             bool operator<(const compute_query_t& other) const {
                 return col < other.col;
@@ -971,9 +1155,12 @@ namespace pecos {
             auto Xi = X.get_row(q->row);
             auto Wj = W.get_col(q->col);
 
+			bool b_col_use_bias = csc_column_has_bias(b_use_bias, Wj);
+
             // Do dot product
-            curr_layer_pred.val[q->write_addr] = vector_ops<query_row_t, weight_col_t>::inner_product(
-                    Xi, Wj, W.rows, bias, b_use_bias);
+            curr_layer_pred.val[q->write_addr] = vector_ops
+				<query_row_t, weight_col_t, matrix_t>::inner_product(
+                    Xi, Wj, W, bias, b_col_use_bias);
         }
 
     }
@@ -1470,6 +1657,48 @@ namespace pecos {
         }
     };
 
+	template <>
+	class LayerData<hash_csc_t, false> {
+	public:
+        typedef typename hash_csc_t::index_type index_type;
+        typedef typename hash_csc_t::value_type value_type;
+
+        // Classifier weights of each layer
+        // Feature dimension x Cluster dimension
+        hash_csc_t W;
+
+        // Parent to child indicator matrix
+        // Child cluster dimension x Parent cluster dimension
+        csc_t C;
+
+        // Whether or not this structure has ownership of W and C matrices
+        bool b_assumes_ownership;
+
+        // The bias for this layer if the model uses a bias
+        value_type bias;
+
+        // Initializes this layer data
+        void init(csc_t& W, csc_t& C, bool b_assumes_ownership, value_type bias) {
+			bool b_has_bias = bias > 0.0;
+            this->bias = bias;
+            this->b_assumes_ownership = b_assumes_ownership;
+            this->W = make_hash_csc_from_csc(W, b_has_bias);
+            this->C = C;
+        }
+
+        // Not necessary for unchuncked layer data
+        void reorder_prediction(csr_t& prediction) {
+        }
+
+        // Frees all memory that is owned by this class
+        ~LayerData() {
+            if (b_assumes_ownership) {
+                W.free_underlying_memory();
+                C.free_underlying_memory();
+            }
+        }
+	};
+
     // Chunked layer data
     template <typename chunked_matrix_t>
     class LayerData<chunked_matrix_t, true> {
@@ -1642,8 +1871,6 @@ namespace pecos {
             W.free_underlying_memory();
             C.free_underlying_memory();
         }
-
-
     };
 
     template <typename w_matrix_t>
@@ -1950,6 +2177,11 @@ namespace pecos {
                 typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_CSC>::matrix_t w_matrix_t;
                 return new MLModel<w_matrix_t>();
             }
+			case LAYER_TYPE_HASH_CSC:
+			{
+				typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_HASH_CSC>::matrix_t w_matrix_t;
+				return new MLModel<w_matrix_t>();
+			}
             default:
             {
                 typedef typename LAYER_TYPE_METADATA_<DEFAULT_LAYER_TYPE>::matrix_t w_matrix_t;
@@ -2205,6 +2437,7 @@ namespace pecos {
             HierarchicalMLModel* model,
             layer_type_t layer_type = DEFAULT_LAYER_TYPE
         ) {
+
             HierarchicalMLModelMetadata xlinear_metadata(folderpath + "/param.json");
             auto depth = xlinear_metadata.depth;
             std::vector<ISpecializedModelLayer*> layers(depth);

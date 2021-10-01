@@ -26,6 +26,7 @@
 #endif
 
 // #define INCLUDE_DENSE_LOOKUP
+#define INCLUDE_HASH_CSC
 
 using namespace std;
 using namespace nlohmann;
@@ -170,6 +171,10 @@ string get_layer_type_str(const layer_type_t type) {
         return "hash-chunked";
     case LAYER_TYPE_BINARY_SEARCH_CHUNKED:
         return "binary-search-chunked";
+#ifdef INCLUDE_HASH_CSC
+    case LAYER_TYPE_HASH_CSC:
+        return "hash-csc";
+#endif
 #ifdef INCLUDE_DENSE_LOOKUP
     case LAYER_TYPE_DENSE_LOOKUP_CHUNKED:
         return "dense-lookup-chunked";
@@ -230,6 +235,11 @@ gauntlet_run_params_t read_macro(const json& macro_json, const string& macro_nam
     } else if (layer_type_str == "binary-search-chunked") {
         params.layer_type = LAYER_TYPE_BINARY_SEARCH_CHUNKED;
     }
+#ifdef INCLUDE_HASH_CSC
+    else if (layer_type_str == "hash-csc") {
+        params.layer_type = LAYER_TYPE_HASH_CSC;
+    }
+#endif
 #ifdef INCLUDE_DENSE_LOOKUP
     else if (layer_type_str == "dense-lookup-chunked") {
         params.layer_type = LAYER_TYPE_DENSE_LOOKUP_CHUNKED;

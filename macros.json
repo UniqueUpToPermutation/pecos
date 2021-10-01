@@ -7,6 +7,14 @@
         "layertype": "csc"
     },
 
+    "st-batch-hash-csc" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "hash-csc"
+    },
+
     "st-batch-hash-ch" : {
         "mode": "batch",
         "threads": 1,
@@ -24,6 +32,8 @@
     },
 
 
+
+
     
     "mt-batch-csc" : {
         "mode": "batch",
@@ -31,6 +41,14 @@
         "beamsize": 10,
         "onlytopk": 10,
         "layertype": "csc"
+    },
+
+    "mt-batch-hash-csc" : {
+        "mode": "batch",
+        "threads": -1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "hash-csc"
     },
 
     "mt-batch-hash-ch" : {

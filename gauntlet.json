@@ -8,13 +8,12 @@
             "macros": [
                 "st-batch-csc", 
                 "st-batch-hash-ch", 
-                "st-batch-binary-search-ch"
+                "st-batch-binary-search-ch",
+                "st-batch-hash-csc"
             ],
 
             "datasets": [
-                "eurlex-4k", 
-                "amazoncat-13k", 
-                "wiki10-31k"
+                "eurlex-4k"
             ]
         }
     ],

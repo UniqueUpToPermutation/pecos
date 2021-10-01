@@ -50,6 +50,12 @@ namespace pecos {
     typedef ScipySparseNpz<true, float> ScipyCsrF32Npz;
     typedef ScipySparseNpz<false, float> ScipyCscF32Npz;
 
+    class IPerformanceTimer {
+    public:
+        virtual void BeginLayer() = 0;
+        virtual void EndLayer() = 0;
+    };
+
     enum layer_type_t {
         LAYER_TYPE_CSC,
         LAYER_TYPE_HASH_CHUNKED,
@@ -2025,7 +2031,7 @@ namespace pecos {
                 return this->code_count();
             } else {
                 std::string attr_str(attr);
-                std::runtime_error((attr_str, " is not implemented in get_int_attr."));
+                throw std::runtime_error((attr_str, " is not implemented in get_int_attr."));
             }
         }
 
@@ -2105,7 +2111,8 @@ namespace pecos {
             const char* overridden_post_processor=nullptr,
             const uint32_t overridden_only_topk=0,
             const int threads=-1,
-            const uint32_t depth=0
+            const uint32_t depth=0,
+            IPerformanceTimer* benchmarkTimer=nullptr
         ) {
 
             uint32_t prediction_depth = (depth > 0) ?
@@ -2120,6 +2127,10 @@ namespace pecos {
             // Run the prediction loop, passing predictions down through layers of the model
             for (uint32_t i_layer = 0; i_layer < prediction_depth; ++i_layer) {
                 ISpecializedModelLayer* layer = model_layers[i_layer];
+
+                // For benchmarking
+                if (benchmarkTimer)
+                    benchmarkTimer->BeginLayer();
 
                 // Determine topk for this layer
                 uint32_t local_only_topk = (i_layer == prediction_depth - 1) ? overridden_only_topk : overridden_beam_size;
@@ -2137,6 +2148,10 @@ namespace pecos {
                 );
                 prev_layer_pred.free_underlying_memory();
                 prev_layer_pred = curr_layer_pred;
+
+                // For benchmarking
+                if (benchmarkTimer)
+                    benchmarkTimer->EndLayer();
             }
             prediction = prev_layer_pred;
         }

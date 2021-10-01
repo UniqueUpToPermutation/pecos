@@ -1,0 +1,33 @@
+{
+    "pagesize" : 4096,
+    "datasets-path" : "datasets.json",
+    "macros-path" : "macros.json",
+
+    "multi-runs": [
+        {
+            "macros": [
+                "st-batch-csc", 
+                "st-batch-hash-ch", 
+                "st-batch-binary-search-ch"
+            ],
+
+            "datasets": [
+                "eurlex-4k", 
+                "amazoncat-13k", 
+                "wiki10-31k"
+            ]
+        }
+    ],
+
+    "single-runs": [
+    ],
+
+    "macro-tables": [
+        "last-layer-percent",
+        "last-layer-time",
+        "not-last-layer-time",
+        "total-time-incl-overhead",
+        "total-time",
+        "time-per-query"
+    ]
+}

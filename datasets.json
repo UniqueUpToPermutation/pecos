@@ -1,0 +1,16 @@
+
+{
+    "root" : "datasets",
+
+	"eurlex-4k" : {
+        "queries" : "eurlex-4k/X.tst.tfidf.npz",
+        "truth": "eurlex-4k/Y.tst.npz", 
+        "model": "eurlex-4k/model"
+    },
+
+    "wiki10-31k" : {
+        "queries" : "wiki10-31k/X.tst.tfidf.npz",
+        "truth": "wiki10-31k/Y.tst.npz", 
+        "model": "wiki10-31k/model"
+    }
+}

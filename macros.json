@@ -1,0 +1,51 @@
+{
+    "st-batch-csc" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "csc"
+    },
+
+    "st-batch-hash-ch" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "hash-chunked"
+    },
+
+    "st-batch-binary-search-ch" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "binary-search-chunked"
+    },
+
+
+    
+    "mt-batch-csc" : {
+        "mode": "batch",
+        "threads": -1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "csc"
+    },
+
+    "mt-batch-hash-ch" : {
+        "mode": "batch",
+        "threads": -1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "hash-chunked"
+    },
+
+    "mt-batch-binary-search-ch" : {
+        "mode": "batch",
+        "threads": -1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "binary-search-chunked"
+    }
+}

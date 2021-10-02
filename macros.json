@@ -31,10 +31,24 @@
         "layertype": "binary-search-chunked"
     },
 
+    "st-batch-dense-lookup-ch" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "dense-lookup-chunked"
+    },
+
+    "st-batch-dense-lookup-csc" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "dense-lookup-csc"
+    },
 
 
 
-    
     "mt-batch-csc" : {
         "mode": "batch",
         "threads": -1,

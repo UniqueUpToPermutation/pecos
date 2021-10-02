@@ -25,7 +25,7 @@
 #define PROFILER_STOP
 #endif
 
-// #define INCLUDE_DENSE_LOOKUP
+#define INCLUDE_DENSE_LOOKUP
 #define INCLUDE_HASH_CSC
 
 using namespace std;
@@ -243,6 +243,8 @@ gauntlet_run_params_t read_macro(const json& macro_json, const string& macro_nam
 #ifdef INCLUDE_DENSE_LOOKUP
     else if (layer_type_str == "dense-lookup-chunked") {
         params.layer_type = LAYER_TYPE_DENSE_LOOKUP_CHUNKED;
+    } else if (layer_type_str == "dense-lookup-csc") {
+        params.layer_type = LAYER_TYPE_DENSE_LOOKUP_CSC;
     }
 #endif
     else {

@@ -60,7 +60,9 @@ namespace pecos {
         LAYER_TYPE_CSC,
         LAYER_TYPE_HASH_CHUNKED,
         LAYER_TYPE_BINARY_SEARCH_CHUNKED,
-        LAYER_TYPE_HASH_CSC
+        LAYER_TYPE_HASH_CSC,
+        LAYER_TYPE_DENSE_LOOKUP_CSC,
+        LAYER_TYPE_DENSE_LOOKUP_CHUNKED
     };
 
     struct HierarchicalMLModelMetadata {
@@ -274,7 +276,7 @@ namespace pecos {
             b_has_explicit_bias(false) {
         }
 
-        ~bin_search_chunk_t() {
+        virtual ~bin_search_chunk_t() {
             if (row_ptr) {
                 delete[] row_ptr;
             }
@@ -332,6 +334,11 @@ namespace pecos {
         bool check_bias_explicit(const chunk_t& chunk) const {
             return chunk.row_hash.find(rows - 1) != chunk.row_hash.end();
         }
+
+        virtual void init(index_type rows, index_type cols) {
+            this->rows = rows;
+            this->cols = cols;
+        }
     };
 
     struct bin_search_chunked_matrix_t {
@@ -339,6 +346,7 @@ namespace pecos {
         typedef typename chunk_t::index_type index_type;
         typedef typename chunk_t::mem_index_type mem_index_type;
         typedef typename chunk_t::value_type value_type;
+        typedef std::make_signed_t<index_type> signed_index_type;
         typedef uint32_t chunk_index_type;
 
         static const layer_type_t layer_type = LAYER_TYPE_BINARY_SEARCH_CHUNKED;
@@ -364,6 +372,40 @@ namespace pecos {
 
         bool check_bias_explicit(const chunk_t& chunk) const {
             return chunk.nnz_rows > 0 && chunk.row_idx[chunk.nnz_rows - 1] == rows - 1;
+        }
+
+        virtual void init(index_type rows, index_type cols) {
+            this->rows = rows;
+            this->cols = cols;
+        }
+    };
+
+    struct dense_lookup_chunked_matrix_t : public bin_search_chunked_matrix_t {
+        typedef typename bin_search_chunked_matrix_t::index_type index_type;
+        typedef typename bin_search_chunked_matrix_t::value_type value_type;
+        typedef typename bin_search_chunked_matrix_t::mem_index_type mem_index_type;
+
+        std::vector<bin_search_chunked_matrix_t::signed_index_type> dense_lookup;
+
+        void load_chunk(const chunk_t& chunk) {
+            for (index_type i_row = 0; i_row < chunk.nnz_rows; ++i_row) {
+                index_type row_idx = chunk.row_idx[i_row];
+                dense_lookup[row_idx] = i_row;
+            }
+        }
+
+        void unload_chunk(const chunk_t& chunk) {
+            for (index_type i_row = 0; i_row < chunk.nnz_rows; ++i_row) {
+                index_type row_idx = chunk.row_idx[i_row];
+                dense_lookup[row_idx] = -1;
+            }
+        }
+
+        void init(index_type rows, index_type cols) override {
+            bin_search_chunked_matrix_t::init(rows, cols);
+
+            dense_lookup.resize(rows+1);
+            std::fill(dense_lookup.begin(), dense_lookup.end(), -1);
         }
     };
 
@@ -414,6 +456,43 @@ namespace pecos {
 			return &columns[col];
 		}
 	};
+
+    struct dense_lookup_csc_t : public csc_t {
+        typedef typename csc_t::index_type index_type;
+        typedef typename csc_t::value_type value_type;
+        typedef typename csc_t::mem_index_type mem_index_type;
+
+        typedef std::make_signed_t<index_type> signed_index_type;
+
+        std::vector<signed_index_type> dense_lookup;
+
+        void load_col(const csc_t::col_vec_t& col) {
+            for (index_type i_row = 0; i_row < col.nnz; ++i_row) {
+                index_type row_idx = col.idx[i_row];
+                dense_lookup[row_idx] = i_row;
+            }
+        }
+
+        void unload_col(const csc_t::col_vec_t& col) {
+            for (index_type i_row = 0; i_row < col.nnz; ++i_row) {
+                index_type row_idx = col.idx[i_row];
+                dense_lookup[row_idx] = -1;
+            }
+        }
+
+        void init(index_type rows, index_type cols) {
+            dense_lookup.resize(rows+1);
+            std::fill(dense_lookup.begin(), dense_lookup.end(), -1);
+        }
+
+        dense_lookup_csc_t() : csc_t() {
+            init(0, 0);
+        }
+
+        dense_lookup_csc_t(csc_t&& mat) : csc_t(std::move(mat)) {
+            init(rows, cols);
+        }
+    };
 
 	template <typename T>
 	bool csc_column_has_bias(bool base_b_has_bias, const T& col);
@@ -470,8 +549,7 @@ namespace pecos {
         chunked.chunks = new typename matrix_type_t::chunk_t[chunk_count];
         chunked.entries = new chunk_entry_t[mat.col_ptr[mat.cols]];
         chunked.chunk_count = chunk_count;
-        chunked.cols = mat.cols;
-        chunked.rows = mat.rows;
+        chunked.init(mat.rows, mat.cols);
 
         std::vector<mem_index_type> chunk_ptr(chunk_count + 1);
 
@@ -775,6 +853,67 @@ namespace pecos {
         }
     };
 
+    template <>
+    struct chunk_ops<typename csr_t::row_vec_t, dense_lookup_chunked_matrix_t> {
+        // Please make sure that the memory in result_dest has already been zeroed!
+        // Compute the inner product of a vector and chunk in binary search format.
+        // Inner product is computed via binary search.
+        static void compute_chunk_inner_product_write_to_zeroed_block(
+            const csr_t::row_vec_t& v, const bin_search_chunk_t& chunk,
+            const dense_lookup_chunked_matrix_t& chunk_matrix,
+            typename dense_lookup_chunked_matrix_t::value_type* output_block,
+            typename dense_lookup_chunked_matrix_t::value_type bias, bool b_use_bias) {
+
+            typedef typename dense_lookup_chunked_matrix_t::index_type chunk_index_t;
+            typedef typename dense_lookup_chunked_matrix_t::signed_index_type signed_chunk_index_t;
+            typedef typename csr_t::row_vec_t::index_type vec_index_t;
+
+            for (vec_index_t i_nz = 0; i_nz < v.nnz; ++i_nz) {
+                signed_chunk_index_t i_lookup = chunk_matrix.dense_lookup[v.idx[i_nz]];
+
+                if (i_lookup != -1) {
+                    auto v_val = v.val[i_nz];
+                    add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                        i_lookup, v_val, output_block);
+                }
+            }
+
+            // There is a bias
+            if (b_use_bias) {
+                // Add bias term if necessary
+                auto last = chunk.nnz_rows - 1;
+                add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                    last, bias, output_block);
+            }
+        }
+    };
+
+    template <>
+    struct chunk_ops<typename drm_t::row_vec_t, dense_lookup_chunked_matrix_t> {
+        static void compute_chunk_inner_product_write_to_zeroed_block(
+            const typename drm_t::row_vec_t& v, const bin_search_chunk_t& chunk,
+            const dense_lookup_chunked_matrix_t& chunk_matrix,
+            typename dense_lookup_chunked_matrix_t::value_type* output_block,
+            typename dense_lookup_chunked_matrix_t::value_type bias, bool b_use_bias) {
+
+            uint32_t it_end = chunk.nnz_rows;
+            if (b_use_bias) {
+                // Add bias term
+                add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                    it_end - 1, bias, output_block);
+                // Exclude bias term from below
+                --it_end;
+            }
+
+            // Iterate through all non-bias terms
+            for (uint32_t it = 0; it != it_end; ++it) {
+                auto v_val = v.val[chunk.row_idx[it]];
+                add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                    it, v_val, output_block);
+            }
+        }
+    };
+
     template <layer_type_t type>
     struct LAYER_TYPE_METADATA_;
 
@@ -796,6 +935,16 @@ namespace pecos {
     template <>
     struct LAYER_TYPE_METADATA_<LAYER_TYPE_HASH_CSC> {
         typedef hash_csc_t matrix_t;
+    };
+
+    template <>
+    struct LAYER_TYPE_METADATA_<LAYER_TYPE_DENSE_LOOKUP_CHUNKED> {
+        typedef dense_lookup_chunked_matrix_t matrix_t;
+    };
+
+    template <>
+    struct LAYER_TYPE_METADATA_<LAYER_TYPE_DENSE_LOOKUP_CSC> {
+        typedef dense_lookup_csc_t matrix_t;
     };
 
     template <typename matrix_t>
@@ -842,6 +991,20 @@ namespace pecos {
         static constexpr const char* TYPE_NAME = "hash_csc_t";
 	};
 
+    template <>
+    struct WEIGHT_MATRIX_METADATA_<dense_lookup_chunked_matrix_t> {
+        const static bool IS_CHUNKED = true;
+        const static layer_type_t LAYER_TYPE = LAYER_TYPE_DENSE_LOOKUP_CHUNKED;
+        static constexpr const char* TYPE_NAME = "dense_lookup_chunked_matrix_t";
+    };
+
+    template <>
+    struct WEIGHT_MATRIX_METADATA_<dense_lookup_csc_t> {
+        const static bool IS_CHUNKED = false;
+        const static layer_type_t LAYER_TYPE = LAYER_TYPE_DENSE_LOOKUP_CSC;
+        static constexpr const char* TYPE_NAME = "dense_lookup_csc_t";
+    };
+
     template<typename matrix_t,
         bool chunked = WEIGHT_MATRIX_METADATA_<matrix_t>::IS_CHUNKED>
     struct w_ops;
@@ -849,7 +1012,7 @@ namespace pecos {
     template<typename chunked_matrix_t>
     struct w_ops<chunked_matrix_t, true> {
         template <typename query_matrix_t, typename prediction_matrix_t>
-        static void compute_sparse_predictions(const query_matrix_t& X, const chunked_matrix_t& W,
+        static void compute_sparse_predictions(const query_matrix_t& X, chunked_matrix_t& W,
             typename csr_t::mem_index_type* row_ptr, // Sparsity pattern of prediction at current layer
             typename csr_t::index_type* col_idx,
             bool b_sort_by_chunk,
@@ -861,7 +1024,7 @@ namespace pecos {
     template <typename matrix_t>
     struct w_ops<matrix_t, false> {
         template <typename query_matrix_t, typename prediction_matrix_t>
-        static void compute_sparse_predictions(const query_matrix_t& X, const matrix_t& W,
+        static void compute_sparse_predictions(const query_matrix_t& X, matrix_t& W,
             typename csr_t::mem_index_type* row_ptr,
             typename csr_t::index_type* col_idx, // Sparsity pattern of prediction at current layer
             bool b_sort_by_chunk,
@@ -870,11 +1033,93 @@ namespace pecos {
             prediction_matrix_t& curr_layer_pred);
     };
 
+    template <typename chunked_matrix_t, typename query_matrix_t>
+    struct chunked_compute_query_t {
+        typename query_matrix_t::index_type row;
+        typename chunked_matrix_t::chunk_index_type chunk;
+        typename csr_t::mem_index_type write_addr;
+
+        bool operator<(const chunked_compute_query_t<chunked_matrix_t, query_matrix_t>& other) const {
+            return chunk < other.chunk;
+        }
+    };
+
+    template <typename chunked_matrix_t,
+        typename query_matrix_t,
+        typename prediction_matrix_t,
+        typename query_row_t,
+        typename compute_query_t,
+        typename mem_index_type>
+    struct eval_chunked_queries {
+        inline static void eval(
+            const query_matrix_t& X,
+            const chunked_matrix_t& W,
+            const std::vector<compute_query_t>& compute_queries,
+            float bias,
+            prediction_matrix_t& curr_layer_pred) {
+                mem_index_type parent_nnz = compute_queries.size();
+
+    #pragma omp parallel for schedule(dynamic,64)
+            for (mem_index_type i_query = 0; i_query < parent_nnz; ++i_query) {
+                const compute_query_t* query = &compute_queries[i_query];
+                auto xi = X.get_row(query->row);
+                auto& chunk = W.chunks[query->chunk];
+                auto write_ptr = &curr_layer_pred.val[query->write_addr];
+                auto b_use_bias = chunk.b_has_explicit_bias;
+                chunk_ops<query_row_t, chunked_matrix_t>::
+                    compute_chunk_inner_product_write_to_zeroed_block(
+                        xi, chunk, W, write_ptr, bias, b_use_bias);
+            }
+        }
+    };
+
+    // Specialized evaluation for dense lookup chunked
+    template <typename query_matrix_t,
+        typename prediction_matrix_t,
+        typename query_row_t,
+        typename compute_query_t,
+        typename mem_index_type>
+    struct eval_chunked_queries<
+        dense_lookup_chunked_matrix_t,
+        query_matrix_t,
+        prediction_matrix_t,
+        query_row_t,
+        compute_query_t,
+        mem_index_type> {
+        inline static void eval(
+            const query_matrix_t& X,
+            dense_lookup_chunked_matrix_t& W,
+            const std::vector<compute_query_t>& compute_queries,
+            float bias,
+            prediction_matrix_t& curr_layer_pred) {
+            mem_index_type parent_nnz = compute_queries.size();
+
+            for (mem_index_type i_query = 0; i_query < parent_nnz; ++i_query) {
+                const compute_query_t* query = &compute_queries[i_query];
+                auto xi = X.get_row(query->row);
+                auto& chunk = W.chunks[query->chunk];
+                auto write_ptr = &curr_layer_pred.val[query->write_addr];
+                auto b_use_bias = chunk.b_has_explicit_bias;
+
+                if (i_query == 0 || query->chunk != compute_queries[i_query - 1].chunk)
+                    W.load_chunk(chunk);
+
+                chunk_ops<query_row_t, dense_lookup_chunked_matrix_t>::
+                    compute_chunk_inner_product_write_to_zeroed_block(
+                        xi, chunk, W, write_ptr, bias, b_use_bias);
+
+                if (i_query == parent_nnz - 1 || query->chunk != compute_queries[i_query + 1].chunk)
+                    W.unload_chunk(chunk);
+            }
+        }
+    };
+
     // Compute the predictions of a layer (before post process) on the specified sparsity pattern
     template <typename chunked_matrix_t>
     template <typename query_matrix_t, typename prediction_matrix_t>
-    void w_ops<chunked_matrix_t, true>::compute_sparse_predictions(const query_matrix_t& X,
-        const chunked_matrix_t& W,
+    void w_ops<chunked_matrix_t, true>::compute_sparse_predictions(
+        const query_matrix_t& X,
+        chunked_matrix_t& W,
         typename csr_t::mem_index_type* row_ptr,
         typename csr_t::index_type* col_idx, // Sparsity pattern of prediction at current layer
         bool b_sort_by_chunk,
@@ -882,15 +1127,8 @@ namespace pecos {
         const prediction_matrix_t& prev_layer_pred,
         prediction_matrix_t& curr_layer_pred) {
 
-        struct compute_query_t {
-            typename query_matrix_t::index_type row;
-            typename chunked_matrix_t::chunk_index_type chunk;
-            typename csr_t::mem_index_type write_addr;
-
-            bool operator<(const compute_query_t& other) const {
-                return chunk < other.chunk;
-            }
-        };
+        typedef chunked_compute_query_t<chunked_matrix_t, query_matrix_t> 
+            compute_query_t;
 
         typename prediction_matrix_t::mem_index_type* parent_row_ptr = prev_layer_pred.row_ptr;
         typename prediction_matrix_t::index_type* parent_col_idx = prev_layer_pred.col_idx;
@@ -941,18 +1179,10 @@ namespace pecos {
             std::stable_sort(compute_queries.begin(), compute_queries.end());
         }
 
-#pragma omp parallel for schedule(dynamic,64)
-        for (mem_index_type i_query = 0; i_query < parent_nnz; ++i_query) {
-            compute_query_t* query = &compute_queries[i_query];
-            auto xi = X.get_row(query->row);
-            auto& chunk = W.chunks[query->chunk];
-            auto write_ptr = &curr_layer_pred.val[query->write_addr];
-            auto b_use_bias = chunk.b_has_explicit_bias;
-            chunk_ops<query_row_t, chunked_matrix_t>::
-                compute_chunk_inner_product_write_to_zeroed_block(
-                    xi, chunk, W, write_ptr, bias, b_use_bias);
-        }
-
+        // Evaluate everything!
+        eval_chunked_queries<chunked_matrix_t, query_matrix_t, prediction_matrix_t,
+            query_row_t, compute_query_t, mem_index_type>::eval(
+                X, W, compute_queries, bias, curr_layer_pred);
     }
 
    template <typename query_vec_t, typename weight_vec_t, typename matrix_t>
@@ -1095,11 +1325,182 @@ namespace pecos {
 		}
 	};
 
+    template <>
+    struct vector_ops<
+        typename csr_t::row_vec_t, 
+        typename dense_lookup_csc_t::col_vec_t, 
+        dense_lookup_csc_t> {
+        // Please make sure that the memory in result_dest has already been zeroed!
+        // Compute the inner product of a vector and chunk in binary search format.
+        // Inner product is computed via binary search.
+        static float inner_product(
+            const csr_t::row_vec_t& v, 
+            const dense_lookup_csc_t::col_vec_t& weight,
+            const dense_lookup_csc_t& matrix,
+            const typename hash_csc_column_t::value_type bias, 
+		    bool b_use_bias) {
+
+            typedef typename hash_csc_t::value_type value_type;
+            typedef typename dense_lookup_csc_t::index_type chunk_index_t;
+            typedef typename dense_lookup_csc_t::signed_index_type signed_chunk_index_t;
+            typedef typename csr_t::row_vec_t::index_type vec_index_t;
+
+            value_type res = 0.0;
+
+            for (vec_index_t i_nz = 0; i_nz < v.nnz; ++i_nz) {
+                signed_chunk_index_t i_lookup = matrix.dense_lookup[v.idx[i_nz]];
+
+                if (i_lookup != -1) {
+                    auto v_val = v.val[i_nz];
+                    res += v_val * weight.val[i_lookup];
+                }
+            }
+
+            // There is a bias
+            if (b_use_bias) {
+                 // Add bias term if necessary
+                auto last = weight.nnz - 1;
+                res += bias * weight.val[last];
+            }
+
+            return res;
+        }
+    };
+
+    template <>
+    struct vector_ops<
+        typename drm_t::row_vec_t, 
+        typename dense_lookup_csc_t::col_vec_t, 
+        dense_lookup_csc_t> {
+        // Please make sure that the memory in result_dest has already been zeroed!
+        // Compute the inner product of a vector and chunk in binary search format.
+        // Inner product is computed via binary search.
+        static float inner_product(
+            const typename drm_t::row_vec_t& query,
+            const dense_lookup_csc_t::col_vec_t& weight,
+            const dense_lookup_csc_t& matrix,
+            const typename hash_csc_column_t::value_type bias, 
+		    bool b_use_bias) {
+
+            typedef typename hash_csc_t::value_type value_type;
+            typedef typename dense_lookup_csc_t::index_type chunk_index_t;
+            typedef typename dense_lookup_csc_t::signed_index_type signed_chunk_index_t;
+            typedef typename csr_t::row_vec_t::index_type vec_index_t;
+
+            value_type res = 0.0;
+
+            for (vec_index_t i_nz = 0; i_nz < query.len; ++i_nz) {
+                signed_chunk_index_t i_lookup = matrix.dense_lookup[i_nz];
+
+                if (i_lookup != -1) {
+                    auto v_val = query.val[i_nz];
+                    res += v_val * weight.val[i_lookup];
+                }
+            }
+
+            // There is a bias
+            if (b_use_bias) {
+                // Add bias term if necessary
+                auto last = weight.nnz - 1;
+                res += bias * weight.val[last];
+            }
+
+            return res;
+        }
+    };
+
+
+    template <typename matrix_t, typename query_row_t>
+    struct unchunked_compute_query_t {
+        typename query_row_t::index_type row;
+        typename matrix_t::index_type col;
+        typename matrix_t::mem_index_type write_addr;
+
+        bool operator<(const unchunked_compute_query_t<matrix_t, query_row_t>& other) const {
+            return col < other.col;
+        }
+    };
+
+
+    template <typename matrix_t,
+        typename query_matrix_t,
+        typename prediction_matrix_t,
+        typename query_row_t,
+        typename compute_query_t,
+        typename mem_index_type>
+    struct eval_unchunked_queries {
+        inline static void eval(const query_matrix_t& X,
+            matrix_t& W,
+            const std::vector<compute_query_t>& compute_queries,
+            float bias,
+            bool b_use_bias,
+            prediction_matrix_t& curr_layer_pred) {
+            mem_index_type nnz = compute_queries.size();
+
+            #pragma omp parallel for schedule(dynamic,64)
+            for (mem_index_type i_query = 0; i_query < nnz; ++i_query) {
+                const compute_query_t* q = &compute_queries[i_query];
+                auto Xi = X.get_row(q->row);
+                auto Wj = W.get_col(q->col);
+
+                bool b_col_use_bias = csc_column_has_bias(b_use_bias, Wj);
+
+                // Do dot product
+                curr_layer_pred.val[q->write_addr] = vector_ops
+                    <query_row_t, decltype(Wj), matrix_t>::inner_product(
+                        Xi, Wj, W, bias, b_col_use_bias);
+            }
+        }
+    };
+
+    // Specialized for dense lookup csc
+    template <typename query_matrix_t,
+        typename prediction_matrix_t,
+        typename query_row_t,
+        typename compute_query_t,
+        typename mem_index_type>
+    struct eval_unchunked_queries<
+            dense_lookup_csc_t,
+            query_matrix_t,
+            prediction_matrix_t,
+            query_row_t,
+            compute_query_t,
+            mem_index_type> {
+
+        inline static void eval(
+            const query_matrix_t& X,
+            dense_lookup_csc_t& W,
+            const std::vector<compute_query_t>& compute_queries,
+            float bias,
+            bool b_use_bias,
+            prediction_matrix_t& curr_layer_pred) {
+            mem_index_type parent_nnz = compute_queries.size();
+
+            for (mem_index_type i_query = 0; i_query < parent_nnz; ++i_query) {
+                const compute_query_t* query = &compute_queries[i_query];
+                auto Xi = X.get_row(query->row);
+                auto Wj = W.get_col(query->col);
+
+                bool b_col_use_bias = csc_column_has_bias(b_use_bias, Wj);
+
+                if (i_query == 0 || query->col != compute_queries[i_query - 1].col)
+                    W.load_col(Wj);
+
+                curr_layer_pred.val[query->write_addr] = vector_ops
+                    <query_row_t, decltype(Wj), dense_lookup_csc_t>::inner_product(
+                        Xi, Wj, W, bias, b_col_use_bias);
+
+                if (i_query == parent_nnz - 1 || query->col != compute_queries[i_query + 1].col)
+                    W.unload_col(Wj);
+            }
+        }
+    };
+
     // Unchunked version of compute_sparse_predictions.
 	template <typename matrix_t>
     template <typename query_matrix_t, typename prediction_matrix_t>
     void w_ops<matrix_t, false>::compute_sparse_predictions(const query_matrix_t& X,
-        const matrix_t& W,
+        matrix_t& W,
         typename csr_t::mem_index_type* row_ptr,
         typename csr_t::index_type* col_idx, // Sparsity pattern for this layer
         bool b_sort_by_chunk,
@@ -1110,15 +1511,7 @@ namespace pecos {
         typedef typename query_matrix_t::row_vec_t query_row_t;
         typedef typename matrix_t::col_vec_t weight_col_t;
 
-        struct compute_query_t {
-            typename query_row_t::index_type row;
-            typename matrix_t::index_type col;
-            typename matrix_t::mem_index_type write_addr;
-
-            bool operator<(const compute_query_t& other) const {
-                return col < other.col;
-            }
-        };
+        typedef unchunked_compute_query_t<matrix_t, query_row_t> compute_query_t;
 
         auto rows = X.rows;
         auto cols = W.cols;
@@ -1154,20 +1547,9 @@ namespace pecos {
             std::sort(queries.begin(), queries.end());
         }
 
-#pragma omp parallel for schedule(dynamic,64)
-        for (mem_index_type i_query = 0; i_query < nnz; ++i_query) {
-            compute_query_t* q = &queries[i_query];
-            auto Xi = X.get_row(q->row);
-            auto Wj = W.get_col(q->col);
-
-			bool b_col_use_bias = csc_column_has_bias(b_use_bias, Wj);
-
-            // Do dot product
-            curr_layer_pred.val[q->write_addr] = vector_ops
-				<query_row_t, weight_col_t, matrix_t>::inner_product(
-                    Xi, Wj, W, bias, b_col_use_bias);
-        }
-
+        eval_unchunked_queries<matrix_t, query_matrix_t, 
+            prediction_matrix_t, query_row_t, compute_query_t, index_type>::eval(
+                X, W, queries, bias, b_use_bias, curr_layer_pred);
     }
 
     // Prolongates the predictions of the previous layer to all of the children of nodes in
@@ -1511,8 +1893,8 @@ namespace pecos {
     class IModelLayer {
     protected:
         virtual void init(
-            csc_t& W,
-            csc_t& C,
+            csc_t&& W,
+            csc_t&& C,
             uint32_t depth,
             bool b_assumes_ownership,
             MLModelMetadata& metadata
@@ -1600,7 +1982,9 @@ namespace pecos {
         py_matrix_csc_C = csc_npz_to_csc_t_deep_copy(C);
         py_matrix_csc_W = csc_npz_to_csc_t_deep_copy(W);
 
-        model->init(py_matrix_csc_W, py_matrix_csc_C, cur_depth, true, metadata);
+        model->init(std::move(py_matrix_csc_W), 
+            std::move(py_matrix_csc_C), 
+            cur_depth, true, metadata);
     }
 
     template <typename index_type, typename value_type>
@@ -1642,11 +2026,11 @@ namespace pecos {
         value_type bias;
 
         // Initializes this layer data
-        void init(csc_t& W, csc_t& C, bool b_assumes_ownership, value_type bias) {
+        void init(csc_t&& W, csc_t&& C, bool b_assumes_ownership, value_type bias) {
             this->bias = bias;
             this->b_assumes_ownership = b_assumes_ownership;
-            this->W = W;
-            this->C = C;
+            this->W = std::move(W);
+            this->C = std::move(C);
         }
 
         // Not necessary for unchuncked layer data
@@ -1683,7 +2067,7 @@ namespace pecos {
         value_type bias;
 
         // Initializes this layer data
-        void init(csc_t& W, csc_t& C, bool b_assumes_ownership, value_type bias) {
+        void init(csc_t&& W, csc_t&& C, bool b_assumes_ownership, value_type bias) {
 			bool b_has_bias = bias > 0.0;
             this->bias = bias;
             this->b_assumes_ownership = b_assumes_ownership;
@@ -1828,7 +2212,7 @@ namespace pecos {
         value_type bias;
 
         // Initializes this layer data
-        void init(csc_t& _W, csc_t& _C, bool b_assumes_ownership, value_type bias) {
+        void init(csc_t&& _W, csc_t&& _C, bool b_assumes_ownership, value_type bias) {
             bool b_has_bias = bias > 0.0;
             this->bias = bias;
             this->b_assumes_ownership = b_assumes_ownership;
@@ -1906,14 +2290,14 @@ namespace pecos {
 
     protected:
         void init(
-            csc_t& W,
-            csc_t& C,
+            csc_t&& W,
+            csc_t&& C,
             uint32_t depth,
             bool b_assumes_ownership,
             MLModelMetadata& metadata
         ) override {
             statistics = layer_statistics_t::compute(W, C);
-            layer_data.init(W, C, b_assumes_ownership, metadata.bias);
+            layer_data.init(std::move(W), std::move(C), b_assumes_ownership, metadata.bias);
             cur_depth = depth;
 
             post_processor = PostProcessor<value_type>::get(metadata.post_processor);
@@ -2213,10 +2597,19 @@ namespace pecos {
                 typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_HASH_CSC>::matrix_t w_matrix_t;
                 return new MLModel<w_matrix_t>();
             }
+            case LAYER_TYPE_DENSE_LOOKUP_CHUNKED:
+            {
+                typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_DENSE_LOOKUP_CHUNKED>::matrix_t w_matrix_t;
+                return new MLModel<w_matrix_t>();
+            }
+            case LAYER_TYPE_DENSE_LOOKUP_CSC:
+            {
+                typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_DENSE_LOOKUP_CSC>::matrix_t w_matrix_t;
+                return new MLModel<w_matrix_t>();
+            }
             default:
             {
-                typedef typename LAYER_TYPE_METADATA_<DEFAULT_LAYER_TYPE>::matrix_t w_matrix_t;
-                return new MLModel<w_matrix_t>();
+                throw std::runtime_error("Unrecognized layer type!");
             }
         }
     }

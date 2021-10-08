@@ -12,10 +12,14 @@
                 "st-batch-hash-ch",
                 "st-batch-dense-lookup-ch",
                 "st-batch-dense-lookup-csc",
+                "st-batch-march-csc",
+                "st-batch-march-ch",
                 "st-realtime-csc",
                 "st-realtime-hash-csc",
                 "st-realtime-binary-search-ch",
-                "st-realtime-hash-ch"
+                "st-realtime-hash-ch",
+                "st-realtime-march-csc",
+                "st-realtime-march-ch"
             ],
 
             "datasets": [
@@ -27,11 +31,22 @@
     "single-runs": [
     ],
 
-    "macro-tables": [
+    "#macro-tables": [
+        "prec@1",
+        "recall@1",
+        "prec@5",
+        "recall@5",
         "last-layer-percent",
         "last-layer-time",
         "not-last-layer-time",
         "total-time-incl-overhead",
+        "total-time",
+        "time-per-query"
+    ],
+
+    "macro-tables": [
+        "prec@1",
+        "recall@1",
         "total-time",
         "time-per-query"
     ]

@@ -27,6 +27,7 @@
 
 #define INCLUDE_DENSE_LOOKUP
 #define INCLUDE_HASH_CSC
+#define INCLUDE_MARCHING_POINTERS
 
 using namespace std;
 using namespace nlohmann;
@@ -178,6 +179,14 @@ string get_layer_type_str(const layer_type_t type) {
 #ifdef INCLUDE_DENSE_LOOKUP
     case LAYER_TYPE_DENSE_LOOKUP_CHUNKED:
         return "dense-lookup-chunked";
+    case LAYER_TYPE_DENSE_LOOKUP_CSC:
+        return "dense-lookup-csc";
+#endif
+#ifdef INCLUDE_MARCHING_POINTERS
+    case LAYER_TYPE_MARCH_CSC:
+        return "march-csc";
+    case LAYER_TYPE_MARCH_CHUNKED:
+        return "march-chunked";
 #endif
     default:
         return "unknown";
@@ -246,6 +255,13 @@ gauntlet_run_params_t read_macro(const json& macro_json, const string& macro_nam
         params.layer_type = LAYER_TYPE_DENSE_LOOKUP_CHUNKED;
     } else if (layer_type_str == "dense-lookup-csc") {
         params.layer_type = LAYER_TYPE_DENSE_LOOKUP_CSC;
+    }
+#endif
+#ifdef INCLUDE_MARCHING_POINTERS
+    else if (layer_type_str == "march-chunked") {
+        params.layer_type = LAYER_TYPE_MARCH_CHUNKED;
+    } else if (layer_type_str == "march-csc") {
+        params.layer_type = LAYER_TYPE_MARCH_CSC;
     }
 #endif
     else {
@@ -793,6 +809,20 @@ string get_macro_result(gauntlet_run_results_t& result, const string& data_type)
     }
     else if (data_type == "query-postprocess-time") {
         s << "N/A";
+    } else if (data_type.length() > 5 && data_type.substr(0, 5) == "prec@") {
+        auto num = std::stoi(data_type.substr(5));
+        if (num - 1 > result.metrics.size()) {
+            s << "N/A";
+        } else {
+            s << setprecision(4) << result.metrics[num - 1].precision * 100;
+        }
+    } else if (data_type.length() > 7 && data_type.substr(0, 7) == "recall@") {
+        auto num = std::stoi(data_type.substr(7));
+        if (num - 1 > result.metrics.size()) {
+            s << "N/A";
+        } else {
+            s << setprecision(4) << result.metrics[num - 1].recall * 100;
+        }
     }
     else {
         s << "N/A";
@@ -832,6 +862,10 @@ void print_macro_table(map<pair<string, string>, gauntlet_run_results_t>& result
         cout << "Query Preprocess Time:" << endl;
     else if (data_type == "query-postprocess-time")
         cout << "Query Postprocess Time:" << endl;
+    else if (data_type.length() > 5 && data_type.substr(0, 5) == "prec@")
+        cout << data_type << ":" << endl;
+    else if (data_type.length() > 7 && data_type.substr(0, 7) == "recall@")
+        cout << data_type << ":" << endl;
     else
         cout << "[Unknown Table Type]" << endl;
 

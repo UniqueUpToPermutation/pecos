@@ -47,6 +47,22 @@
         "layertype": "dense-lookup-csc"
     },
 
+    "st-batch-march-csc" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "march-csc"
+    },
+
+    "st-batch-march-ch" : {
+        "mode": "batch",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "march-chunked"
+    },
+
     
 
 
@@ -98,6 +114,22 @@
         "layertype": "dense-lookup-csc"
     },
 
+    "st-realtime-march-csc" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "march-csc"
+    },
+
+    "st-realtime-march-ch" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "march-chunked"
+    },
+
 
 
     "mt-batch-csc" : {
@@ -130,5 +162,21 @@
         "beamsize": 10,
         "onlytopk": 10,
         "layertype": "binary-search-chunked"
+    },
+
+    "mt-batch-march-csc" : {
+        "mode": "batch",
+        "threads": -1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "march-csc"
+    },
+
+    "mt-batch-march-ch" : {
+        "mode": "batch",
+        "threads": -1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "march-chunked"
     }
 }

@@ -62,7 +62,9 @@ namespace pecos {
         LAYER_TYPE_BINARY_SEARCH_CHUNKED,
         LAYER_TYPE_HASH_CSC,
         LAYER_TYPE_DENSE_LOOKUP_CSC,
-        LAYER_TYPE_DENSE_LOOKUP_CHUNKED
+        LAYER_TYPE_DENSE_LOOKUP_CHUNKED,
+        LAYER_TYPE_MARCH_CSC,
+        LAYER_TYPE_MARCH_CHUNKED
     };
 
     struct HierarchicalMLModelMetadata {
@@ -409,6 +411,17 @@ namespace pecos {
         }
     };
 
+    struct march_chunked_matrix_t : public bin_search_chunked_matrix_t {
+        typedef typename bin_search_chunked_matrix_t::chunk_t chunk_t;
+        typedef typename bin_search_chunked_matrix_t::index_type index_type;
+        typedef typename bin_search_chunked_matrix_t::mem_index_type mem_index_type;
+        typedef typename bin_search_chunked_matrix_t::value_type value_type;
+        typedef typename bin_search_chunked_matrix_t::signed_index_type signed_index_type;
+        typedef typename bin_search_chunked_matrix_t::chunk_index_type chunk_index_type;
+
+        static const layer_type_t layer_type = LAYER_TYPE_MARCH_CHUNKED;
+    };
+
 	struct hash_csc_column_t {
         typedef typename csc_t::index_type index_type;
         typedef typename csc_t::mem_index_type mem_index_type;
@@ -491,6 +504,20 @@ namespace pecos {
 
         dense_lookup_csc_t(csc_t&& mat) : csc_t(std::move(mat)) {
             init(rows, cols);
+        }
+    };
+
+    struct march_csc_t : public csc_t {
+        typedef typename csc_t::index_type index_type;
+        typedef typename csc_t::value_type value_type;
+        typedef typename csc_t::mem_index_type mem_index_type;
+
+        typedef std::make_signed_t<index_type> signed_index_type;
+
+        march_csc_t() : csc_t() {
+        }
+
+        march_csc_t(csc_t&& mat) : csc_t(std::move(mat)) {
         }
     };
 
@@ -854,6 +881,74 @@ namespace pecos {
     };
 
     template <>
+    struct chunk_ops<typename csr_t::row_vec_t, march_chunked_matrix_t> {
+        // Please make sure that the memory in result_dest has already been zeroed!
+        // Compute the inner product of a vector and chunk in binary search format.
+        // Inner product is computed via binary search.
+        static void compute_chunk_inner_product_write_to_zeroed_block(
+            const csr_t::row_vec_t& v, const bin_search_chunk_t& chunk,
+            const march_chunked_matrix_t& chunk_matrix,
+            typename march_chunked_matrix_t::value_type* output_block,
+            typename march_chunked_matrix_t::value_type bias, bool b_use_bias) {
+
+            typedef typename march_chunked_matrix_t::index_type chunk_index_t;
+            typedef typename csr_t::row_vec_t::index_type vec_index_t;
+
+            chunk_index_t s = 0;
+            vec_index_t t = 0;
+
+            while (s < chunk.nnz_rows && t < v.nnz) {
+                if (chunk.row_idx[s] == v.idx[t]) {
+                    auto v_val = v.val[t];
+                    add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                        s, v_val, output_block);
+                    ++s;
+                    ++t;
+                } else if (chunk.row_idx[s] < v.idx[t]) {
+                    ++s;
+                }
+                else if (chunk.row_idx[s] > v.idx[t]) {
+                    ++t;
+                }
+            }
+
+            // There is a bias
+            if (b_use_bias) {
+                // Add bias term if necessary
+                auto last = chunk.nnz_rows - 1;
+                add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                    last, bias, output_block);
+            }
+        }
+    };
+
+    template <>
+    struct chunk_ops<typename drm_t::row_vec_t, march_chunked_matrix_t> {
+        static void compute_chunk_inner_product_write_to_zeroed_block(
+            const typename drm_t::row_vec_t& v, const bin_search_chunk_t& chunk,
+            const march_chunked_matrix_t& chunk_matrix,
+            typename march_chunked_matrix_t::value_type* output_block,
+            typename march_chunked_matrix_t::value_type bias, bool b_use_bias) {
+
+            uint32_t it_end = chunk.nnz_rows;
+            if (b_use_bias) {
+                // Add bias term
+                add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                    it_end - 1, bias, output_block);
+                // Exclude bias term from below
+                --it_end;
+            }
+
+            // Iterate through all non-bias terms
+            for (uint32_t it = 0; it != it_end; ++it) {
+                auto v_val = v.val[chunk.row_idx[it]];
+                add_scaled_chunk_row_to_output_block(chunk_matrix, chunk,
+                    it, v_val, output_block);
+            }
+        }
+    };
+
+    template <>
     struct chunk_ops<typename csr_t::row_vec_t, dense_lookup_chunked_matrix_t> {
         // Please make sure that the memory in result_dest has already been zeroed!
         // Compute the inner product of a vector and chunk in binary search format.
@@ -947,6 +1042,16 @@ namespace pecos {
         typedef dense_lookup_csc_t matrix_t;
     };
 
+    template <>
+    struct LAYER_TYPE_METADATA_<LAYER_TYPE_MARCH_CHUNKED> {
+        typedef march_chunked_matrix_t matrix_t;
+    };
+
+    template <>
+    struct LAYER_TYPE_METADATA_<LAYER_TYPE_MARCH_CSC> {
+        typedef march_csc_t matrix_t;
+    };
+
     template <typename matrix_t>
     struct WEIGHT_MATRIX_METADATA_;
 
@@ -1003,6 +1108,20 @@ namespace pecos {
         const static bool IS_CHUNKED = false;
         const static layer_type_t LAYER_TYPE = LAYER_TYPE_DENSE_LOOKUP_CSC;
         static constexpr const char* TYPE_NAME = "dense_lookup_csc_t";
+    };
+
+    template <>
+    struct WEIGHT_MATRIX_METADATA_<march_chunked_matrix_t> {
+        const static bool IS_CHUNKED = true;
+        const static layer_type_t LAYER_TYPE = LAYER_TYPE_MARCH_CHUNKED;
+        static constexpr const char* TYPE_NAME = "march_chunked_matrix_t";
+    };
+
+    template <>
+    struct WEIGHT_MATRIX_METADATA_<march_csc_t> {
+        const static bool IS_CHUNKED = false;
+        const static layer_type_t LAYER_TYPE = LAYER_TYPE_MARCH_CSC;
+        static constexpr const char* TYPE_NAME = "march_csc_t";
     };
 
     template<typename matrix_t,
@@ -1225,6 +1344,86 @@ namespace pecos {
 
             typedef typename csc_t::col_vec_t::value_type value_type;
             typedef typename csc_t::col_vec_t::index_type index_type;
+
+            if (b_use_bias) {
+                value_type res = 0.0;
+                index_type loop_range;
+
+                // Is the bias term in the weight vector nonzero?
+                bool nz_bias = weight.nnz > 0 && weight.idx[weight.nnz - 1] == matrix.rows - 1;
+
+                // If bias is nonzero in weight vector
+                if (nz_bias) {
+                    // Skip over bias when performing inner product
+                    loop_range = weight.nnz - 1;
+                    // Add bias to result
+                    res += bias * weight.val[loop_range];
+                } else {
+                    loop_range = weight.nnz;
+                }
+
+                // Do remaining inner product
+                for (index_type s = 0; s < loop_range; s++) {
+                    res += query[weight.idx[s]] * weight.val[s];
+                }
+
+                return res;
+            } else {
+                return do_dot_product(query, weight);
+            }
+        }
+    };
+
+    template <>
+    struct vector_ops<typename csr_t::row_vec_t, typename march_csc_t::col_vec_t, march_csc_t> {
+        static float inner_product(const typename csr_t::row_vec_t& query,
+            const typename march_csc_t::col_vec_t& weight,
+            const march_csc_t& matrix,
+            typename march_csc_t::col_vec_t::value_type bias, bool b_use_bias) {
+
+            typedef typename march_csc_t::col_vec_t::value_type value_type;
+            typedef typename march_csc_t::col_vec_t::index_type weight_index_type;
+            typedef typename csr_t::row_vec_t::index_type query_index_type;
+
+            weight_index_type s = 0;
+            query_index_type t = 0;
+
+            value_type res = 0.0;
+
+            while (s < weight.nnz && t < query.nnz) {
+                if (weight.idx[s] == query.idx[t]) {
+                    res += weight.val[s] * query.val[t];
+                    ++s;
+                    ++t;
+                } else if (weight.idx[s] < query.idx[t]) {
+                    ++s;
+                }
+                else if (weight.idx[s] > query.idx[t]) {
+                    ++t;
+                }
+            }
+           
+            if (b_use_bias) {
+                 // Is the bias term in the weight vector nonzero?
+                if (weight.nnz > 0 && weight.idx[weight.nnz - 1] == matrix.rows - 1) {
+                    // Add bias to result
+                    res += bias * weight.val[weight.nnz - 1];
+                }
+            }
+
+            return res;
+        }
+    };
+
+    template <>
+    struct vector_ops<typename drm_t::row_vec_t, typename march_csc_t::col_vec_t, march_csc_t> {
+        static float inner_product(const typename drm_t::row_vec_t& query,
+            const typename march_csc_t::col_vec_t& weight,
+            const march_csc_t& matrix,
+            typename march_csc_t::col_vec_t::value_type bias, bool b_use_bias) {
+
+            typedef typename march_csc_t::col_vec_t::value_type value_type;
+            typedef typename march_csc_t::col_vec_t::index_type index_type;
 
             if (b_use_bias) {
                 value_type res = 0.0;
@@ -2260,8 +2459,6 @@ namespace pecos {
             W.free_underlying_memory();
             C.free_underlying_memory();
         }
-
-
     };
 
     template <typename w_matrix_t>
@@ -2605,6 +2802,16 @@ namespace pecos {
             case LAYER_TYPE_DENSE_LOOKUP_CSC:
             {
                 typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_DENSE_LOOKUP_CSC>::matrix_t w_matrix_t;
+                return new MLModel<w_matrix_t>();
+            }
+            case LAYER_TYPE_MARCH_CHUNKED:
+            {
+                typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_MARCH_CHUNKED>::matrix_t w_matrix_t;
+                return new MLModel<w_matrix_t>();
+            }
+            case LAYER_TYPE_MARCH_CSC:
+            {
+                typedef typename LAYER_TYPE_METADATA_<LAYER_TYPE_MARCH_CSC>::matrix_t w_matrix_t;
                 return new MLModel<w_matrix_t>();
             }
             default:

@@ -11,13 +11,15 @@
                 "st-batch-hash-csc",
                 "st-batch-hash-ch",
                 "st-batch-dense-lookup-ch",
-                "st-batch-dense-lookup-csc"
+                "st-batch-dense-lookup-csc",
+                "st-realtime-csc",
+                "st-realtime-hash-csc",
+                "st-realtime-binary-search-ch",
+                "st-realtime-hash-ch"
             ],
 
             "datasets": [
-                "eurlex-4k",
-                "amazoncat-13k",
-                "wiki10-31k"
+                "eurlex-4k"
             ]
         }
     ],

@@ -208,6 +208,7 @@ struct gauntlet_run_results_t {
     duration_t query_preprocess_time;
     duration_t query_postprocess_time;
     statm_t memory_stat;
+    bool b_realtime;
 };
 
 struct gauntlet_results_t {
@@ -557,10 +558,16 @@ void run_model_group(const std::vector<gauntlet_run_params_t>& run_params,
         current_results.input_statistics = QUERY_STATS(X);
         current_results.layer_durations = timer.GetLayerDurations();
         current_results.layer_statistics = mc->get_layer_statistics();
-        current_results.total_duration = timer.GetCummulativeLayerDurations().back();
+        current_results.b_realtime = params.mode == "realtime";
         current_results.total_duration_incl_overhead = timer.GetTotalDuration();
         current_results.params = params;
         current_results.memory_stat = read_off_memory_status();
+
+        if (current_results.b_realtime)
+            current_results.total_duration = timer.GetTotalDuration();
+        else
+            current_results.total_duration = timer.GetCummulativeLayerDurations().back();
+        
         results->runs.push_back(current_results);
 
         cout << endl;
@@ -751,7 +758,7 @@ string get_macro_result(gauntlet_run_results_t& result, const string& data_type)
     if (data_type == "time-per-query") {
         s << setprecision(3) << result.total_duration.count() * 1000.0 / result.input_statistics.rows << " ms";
     } else if (data_type == "last-layer-percent") {
-        if (result.layer_durations.size() > 0) {
+        if (result.layer_durations.size() > 0 && !result.b_realtime) {
             double total = result.total_duration.count();
             double last = result.layer_durations[result.layer_durations.size() - 1].count();
             s << setprecision(3) << last / total * 100.0 << " %";
@@ -759,14 +766,14 @@ string get_macro_result(gauntlet_run_results_t& result, const string& data_type)
         else
             s << "N/A";
     } else if (data_type == "last-layer-time") {
-        if (result.layer_durations.size() > 0) {
+        if (result.layer_durations.size() > 0 && !result.b_realtime) {
             double last = result.layer_durations[result.layer_durations.size() - 1].count();
             s << setprecision(3) << last << " s";
         }
         else
             s << "N/A";
     } else if (data_type == "not-last-layer-time") {
-        if (result.layer_durations.size() > 0) {
+        if (result.layer_durations.size() > 0 && !result.b_realtime) {
             double time = 0.0;
             for (uint32_t ilayer = 0; ilayer < result.layer_durations.size() - 1; ++ilayer)
                 time += result.layer_durations[ilayer].count();
@@ -803,7 +810,7 @@ void print_macro_table(map<pair<string, string>, gauntlet_run_results_t>& result
         largest_size_str = std::max<uint32_t>(largest_size_str, data.size());
 
     vector<uint32_t> columnWidths;
-    columnWidths.push_back(25);
+    columnWidths.push_back(30);
     for (const auto& data : datasets)
         columnWidths.push_back(std::max<uint32_t>(10, largest_size_str));
     uint32_t totalWidth = std::accumulate(columnWidths.begin(), columnWidths.end(), 0u);

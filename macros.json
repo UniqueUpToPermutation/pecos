@@ -47,6 +47,57 @@
         "layertype": "dense-lookup-csc"
     },
 
+    
+
+
+    "st-realtime-csc" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "csc"
+    },
+
+    "st-realtime-hash-csc" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "hash-csc"
+    },
+
+    "st-realtime-hash-ch" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "hash-chunked"
+    },
+
+    "st-realtime-binary-search-ch" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "binary-search-chunked"
+    },
+
+    "st-realtime-dense-lookup-ch" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "dense-lookup-chunked"
+    },
+
+    "st-realtime-dense-lookup-csc" : {
+        "mode": "realtime",
+        "threads": 1,
+        "beamsize": 10,
+        "onlytopk": 10,
+        "layertype": "dense-lookup-csc"
+    },
+
 
 
     "mt-batch-csc" : {

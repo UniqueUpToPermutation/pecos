@@ -5,7 +5,7 @@
 
     "multi-runs": [
         {
-            "#macros": [
+            "macros": [
                 "st-batch-csc",
                 "st-batch-binary-search-ch",
                 "st-batch-hash-csc",
@@ -20,14 +20,6 @@
                 "st-realtime-hash-ch",
                 "st-realtime-march-csc",
                 "st-realtime-march-ch"
-            ],
-
-            "macros": [
-                "st-batch-binary-search-ch",
-                "st-batch-hash-csc",
-                "st-batch-hash-ch",
-                "st-batch-dense-lookup-ch",
-                "st-batch-dense-lookup-csc"
             ],
 
             "datasets": [

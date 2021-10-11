@@ -494,7 +494,7 @@ namespace pecos {
         }
 
         void init(index_type rows, index_type cols) {
-            dense_lookup.resize(rows+1);
+            dense_lookup.resize(rows);
             std::fill(dense_lookup.begin(), dense_lookup.end(), -1);
         }
 
@@ -1533,33 +1533,34 @@ namespace pecos {
         // Compute the inner product of a vector and chunk in binary search format.
         // Inner product is computed via binary search.
         static float inner_product(
-            const csr_t::row_vec_t& v, 
+            const csr_t::row_vec_t& query, 
             const dense_lookup_csc_t::col_vec_t& weight,
             const dense_lookup_csc_t& matrix,
             const typename hash_csc_column_t::value_type bias, 
 		    bool b_use_bias) {
 
             typedef typename hash_csc_t::value_type value_type;
-            typedef typename dense_lookup_csc_t::index_type chunk_index_t;
-            typedef typename dense_lookup_csc_t::signed_index_type signed_chunk_index_t;
-            typedef typename csr_t::row_vec_t::index_type vec_index_t;
+            typedef typename dense_lookup_csc_t::index_type weight_index_type;
+            typedef typename dense_lookup_csc_t::signed_index_type signed_weight_index_type;
+            typedef typename csr_t::row_vec_t::index_type query_index_type;
 
             value_type res = 0.0;
 
-            for (vec_index_t i_nz = 0; i_nz < v.nnz; ++i_nz) {
-                signed_chunk_index_t i_lookup = matrix.dense_lookup[v.idx[i_nz]];
+            for (query_index_type i_nz = 0; i_nz < query.nnz; ++i_nz) {
+                signed_weight_index_type i_lookup = matrix.dense_lookup[query.idx[i_nz]];
 
                 if (i_lookup != -1) {
-                    auto v_val = v.val[i_nz];
+                    auto v_val = query.val[i_nz];
                     res += v_val * weight.val[i_lookup];
                 }
             }
-
-            // There is a bias
+           
             if (b_use_bias) {
-                 // Add bias term if necessary
-                auto last = weight.nnz - 1;
-                res += bias * weight.val[last];
+                 // Is the bias term in the weight vector nonzero?
+                if (weight.nnz > 0 && weight.idx[weight.nnz - 1] == matrix.rows - 1) {
+                    // Add bias to result
+                    res += bias * weight.val[weight.nnz - 1];
+                }
             }
 
             return res;
@@ -1608,7 +1609,6 @@ namespace pecos {
         }
     };
 
-
     template <typename matrix_t, typename query_row_t>
     struct unchunked_compute_query_t {
         typename query_row_t::index_type row;
@@ -1619,7 +1619,6 @@ namespace pecos {
             return col < other.col;
         }
     };
-
 
     template <typename matrix_t,
         typename query_matrix_t,

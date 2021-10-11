@@ -8,6 +8,12 @@
         "model": "eurlex-4k/model"
     },
 
+    "amazoncat-13k" : {
+        "queries" : "amazoncat-13k/X.tst.tfidf.npz",
+        "truth" : "amazoncat-13k/Y.tst.npz",
+        "model" : "amazoncat-13k/model"
+    },
+
     "wiki10-31k" : {
         "queries" : "wiki10-31k/X.tst.tfidf.npz",
         "truth": "wiki10-31k/Y.tst.npz", 

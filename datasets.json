@@ -18,5 +18,23 @@
         "queries" : "wiki10-31k/X.tst.tfidf.npz",
         "truth": "wiki10-31k/Y.tst.npz", 
         "model": "wiki10-31k/model"
+    },
+
+    "wiki-500k" : {
+        "queries" : "wiki-500k/X.tst.tfidf.npz",
+        "truth": "wiki-500k/Y.tst.npz", 
+        "model": "wiki-500k/model"
+    },
+
+    "amazon-670k" : {
+        "queries" : "amazon-670k/X.tst.tfidf.npz",
+        "truth": "amazon-670k/Y.tst.npz", 
+        "model": "amazon-670k/model"
+    },
+
+    "amazon-3m" : {
+        "queries" : "amazon-3m/X.tst.tfidf.npz",
+        "truth": "amazon-3m/Y.tst.npz", 
+        "model": "amazon-3m/model"
     }
 }

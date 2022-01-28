@@ -26,6 +26,15 @@
                 "eurlex-4k",
                 "amazoncat-13k",
                 "wiki10-31k"
+            ],
+
+            "#datasets": [
+                "eurlex-4k",
+                "amazoncat-13k",
+                "wiki10-31k",
+                "wiki-500k",
+                "amazon-670k",
+                "amazon-3m"
             ]
         }
     ],

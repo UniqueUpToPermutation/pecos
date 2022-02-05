@@ -30,7 +30,7 @@ datasets are then listed in dictionary format, where the key is the name of the 
     "model": "eurlex-4k/model"
 },
 ```
-We have already configured the datasets JSON, you will just have to download the datasets and models we trained [LINK TO BE PROVIDED], and place them all in a folder named ``datasets`` relative to the binary directory.
+We have already configured the datasets JSON, you will just have to download the datasets and models we used in the paper at [this link](https://archive.org/download/pecos-dataset/inference-models/), and place them all in a folder named ``datasets`` relative to the binary directory.
 
 -------------------------
 
@@ -86,7 +86,12 @@ To duplicate all of our benchmarks will take some time, so we have included only
 * ``amazon-670k``
 * ``amazon-3m``
 
+Since the datasets are multiple gigabytes large, they are not included by default in the repo, but you can download them at [this link](https://archive.org/download/pecos-dataset/inference-models/).
+
 -------------------------
 
 * **macros.json**: In this JSON file you can add new macros or change existing ones. Modify this if you would like to change things like thread count etc.
 
+## Inference Models/Datasets from our Paper
+
+Once again, all of the models/datasets we used in our paper are available pre-trained and in the correct format at [this link](https://archive.org/download/pecos-dataset/inference-models/).
